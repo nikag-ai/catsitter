@@ -1,11 +1,17 @@
 .env
-tokens.json
 cache/
 node_modules/
 dist/
-catsitter-493023-f632a680145c.json
+.DS_Store
+
+# Exclude all service account keys and tokens
+*.json
+!package.json
+!package-lock.json
+
+# Exclude local test scripts
 test_camera.py
-catsitter-493023-f632a680145c.json
-test_camera.py
-catsitter-493023-f632a680145c.json
-test_camera.py
+check_traits.js
+
+# Exclude user's planning docs
+*.gdoc

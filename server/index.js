@@ -38,6 +38,11 @@ app.use('/api', apiRoutes);
     // 3. AI client
     initGemini();
     
+    // 4. Start Smart Watcher daemon and Cron
+    const { startGo2rtc, startCron } = require('./watcher');
+    startGo2rtc();
+    startCron();
+    
     app.listen(PORT, () => {
       console.log(`✅ Febo backend is running on http://localhost:${PORT}`);
       console.log(`📂 Serving media from: ${CACHE_DIR}`);

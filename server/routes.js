@@ -18,6 +18,15 @@ router.get('/config', (req, res) => {
 });
 
 /**
+ * GET /api/status
+ * Returns current watcher status (cron timer, cooldown status)
+ */
+router.get('/status', (req, res) => {
+  const { getWatcherStatus } = require('./watcher');
+  res.json(getWatcherStatus());
+});
+
+/**
  * GET /api/health
  */
 router.get('/health', async (req, res) => {
@@ -31,20 +40,20 @@ router.get('/health', async (req, res) => {
 
 /**
  * POST /api/events/manual
- * Creates a dummy event in the store for manual cat-checks.
+ * Forces a manual 10s video capture and Gemini analysis, bypassing cooldowns.
  */
-router.post('/events/manual', (req, res) => {
+router.post('/events/manual', async (req, res) => {
   const { eventId } = req.body;
-  const manualEvent = {
-    eventId: eventId || `manual-${Date.now()}`,
-    timestamp: new Date().toISOString(),
-    resourceUpdate: {
-      name: 'manual-trigger',
-      events: { 'sdm.devices.events.CameraMotion.Motion': {} }
-    }
-  };
-  pubsub.addManualEvent(manualEvent);
-  res.json(manualEvent);
+  const manualId = eventId || `manual-${Date.now()}`;
+  
+  try {
+    const { handleManualEvent } = require('./watcher');
+    // We await it so the response returns after it's saved
+    const event = await handleManualEvent(manualId);
+    res.json(event);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 /**

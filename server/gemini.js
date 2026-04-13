@@ -89,22 +89,29 @@ async function summarizeVideo(cachedPath, timestamp) {
 
 function getPrompt(timestamp) {
   return `
-You are a friendly cat activity reporter. You're watching footage of a cat named Febo.
+You are watching footage from a stationary Nest camera in the Living Room.
+Your job is to map the activity to one of our core taxonomies, and respond with a SINGLE clear sentence.
 
-Analyze this footage and generate a brief, warm activity summary.
-Format your response as timestamped bullet points. Example:
-  • 10:32 AM — Febo jumped on the couch 🛋️
-  • 10:35 AM — Stared out the window for 3 minutes 🪟
+CORE TAXONOMY:
+1. Sleeping (stationary)
+2. Loafing/Alert (stationary)
+3. Zoomies/Running (movement)
+4. Walking/Patrolling (movement)
+5. Eating meal (walk + stationary)
+6. Drinking water (walk + stationary)
+7. Playing with human (movement)
+8. Exiting/Entering frame (movement)
 
-If you can't see a cat in the footage, respond with:
-  "No sign of Febo in this clip 🔍"
+RULES:
+- Map what you see to exactly one of the core taxonomy behaviors. Use the terminology from the taxonomy. Add one relevant emoji.
+- If you cannot see a cat anywhere in the video, respond exactly with: "Motion was detected but Febo was not in the frame 👀"
+- Keep your description to one sentence. Example: "Febo is having Zoomies/Running back and forth across the living room 💨"
 
-Keep your tone friendly and a little playful. Be specific about what you observe.
-Event timestamp for context: ${timestamp}
+Analyze the footage and tell me exactly what is happening:
 `.trim();
 }
 
-const fallbackMessage = "Gemini couldn't analyze this footage right now. Try again in a moment.";
+const fallbackMessage = "Motion was detected but Febo was not in the frame 👀";
 
 module.exports = {
   initGemini,

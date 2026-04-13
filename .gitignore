@@ -15,3 +15,8 @@ check_traits.js
 
 # Exclude user's planning docs
 *.gdoc
+
+# Exclude go2rtc binaries and generated configs
+go2rtc
+go2rtc.yaml
+go2rtc.zip

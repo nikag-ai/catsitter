@@ -4,37 +4,78 @@ const fs = require('fs');
 const path = require('path');
 require('dotenv').config();
 
+const { createClient } = require('@supabase/supabase-js');
+
 // In-memory event store: Map<eventId, event>
 const eventStore = new Map();
-const EVENTS_FILE = path.join(__dirname, '..', 'cache', 'events.json');
 
-let googleAuth = null;
-let subscriptionPath = null;
-let pollTimer = null;
+// Initialize Supabase
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SECRET_KEY;
+let supabase;
 
-// ───────────── Persistence ─────────────
+if (supabaseUrl && supabaseKey) {
+  supabase = createClient(supabaseUrl, supabaseKey);
+} else {
+  console.warn("⚠️  Supabase keys not found in .env. Falling back to in-memory only.");
+}
 
-function loadPersistedEvents() {
+// ───────────── Persistence (Supabase) ─────────────
+
+async function loadPersistedEvents() {
+  if (!supabase) return;
   try {
-    if (fs.existsSync(EVENTS_FILE)) {
-      const data = JSON.parse(fs.readFileSync(EVENTS_FILE, 'utf-8'));
-      data.forEach(event => eventStore.set(event.eventId, event));
-      console.log(`📂 Loaded ${eventStore.size} persisted events from disk.`);
+    const { data, error } = await supabase
+      .from('events')
+      .select('*')
+      .order('timestamp', { ascending: false });
+      
+    if (error) throw error;
+    
+    if (data) {
+      data.forEach(row => {
+        // Map postgres snake_case to our JS camelCase
+        const event = {
+          eventId: row.event_id,
+          timestamp: row.timestamp,
+          type: row.type,
+          previewUrl: row.preview_url,
+          eventSessionId: row.event_session_id,
+          eventToken: row.event_token,
+          deviceId: row.device_id,
+          summary: row.summary
+        };
+        eventStore.set(event.eventId, event);
+      });
+      console.log(`☁️ Loaded ${eventStore.size} persisted events from Supabase.`);
     }
   } catch (err) {
-    console.warn(`⚠️ Could not load persisted events: ${err.message}`);
+    console.error(`❌ Could not load events from Supabase: ${err.message}`);
   }
 }
 
-function persistEvents() {
+async function persistEventSingle(event) {
+  if (!supabase) return;
   try {
-    const dir = path.dirname(EVENTS_FILE);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(EVENTS_FILE, JSON.stringify(Array.from(eventStore.values()), null, 2));
+    const { error } = await supabase
+      .from('events')
+      .upsert({
+        event_id: event.eventId,
+        timestamp: event.timestamp,
+        type: event.type,
+        preview_url: event.previewUrl,
+        event_session_id: event.eventSessionId,
+        event_token: event.eventToken,
+        device_id: event.deviceId,
+        summary: event.summary
+      }, { onConflict: 'event_id' });
+      
+    if (error) throw error;
   } catch (err) {
-    console.warn(`⚠️ Could not persist events: ${err.message}`);
+    console.error(`❌ Supabase Upsert Error for ${event.eventId}:`, err.message);
   }
 }
+
 
 // ───────────── Init ─────────────
 
@@ -71,11 +112,11 @@ async function initPubSub() {
 
   subscriptionPath = `projects/${GOOGLE_CLOUD_PROJECT_ID}/subscriptions/${PUBSUB_SUBSCRIPTION_ID}`;
 
-  loadPersistedEvents();
+  await loadPersistedEvents();
   console.log(`📡 Pub/Sub initialized (REST pull mode). Subscription: ${subscriptionPath}`);
 
-  // Start background polling disabled as requested
-  // startPolling();
+  // Start background polling for Google Home events
+  startPolling();
 }
 
 function startPolling() {
@@ -181,8 +222,19 @@ async function pullEvents() {
 
     console.log(`✅ Stored event: ${type} at ${timestamp} (id: ${eventId})`);
     eventStore.set(eventId, normalizedEvent);
+    
+    // Persist to Supabase
+    persistEventSingle(normalizedEvent);
+    
     ackIds.push(msg.ackId);
     newCount++;
+
+    // Trigger the Smart Watcher (deferred require to avoid circular dep)
+    if (type === 'motion' || type === 'person') {
+       const { handleMotionEvent } = require('./watcher');
+       // Run in background without blocking the loop
+       handleMotionEvent(normalizedEvent).catch(err => console.error("Watcher error:", err.message));
+    }
   }
 
   // Acknowledge
@@ -201,7 +253,6 @@ async function pullEvents() {
   }
 
   if (newCount > 0) {
-    persistEvents();
     console.log(`📥 Pulled ${newCount} new events. Store size: ${eventStore.size}`);
   }
 
@@ -225,13 +276,13 @@ function updateEvent(eventId, updates) {
   if (event) {
     Object.assign(event, updates);
     eventStore.set(eventId, event);
-    persistEvents();
+    persistEventSingle(event);
   }
 }
 
 function addManualEvent(event) {
   eventStore.set(event.eventId, event);
-  persistEvents();
+  persistEventSingle(event);
 }
 
 /**
@@ -241,7 +292,7 @@ function updateEventSummary(eventId, summary) {
   const event = eventStore.get(eventId);
   if (event) {
     event.summary = summary;
-    persistEvents();
+    persistEventSingle(event);
     console.log(`📝 Saved summary to persistent store for event: ${eventId}`);
   }
 }
@@ -254,4 +305,6 @@ module.exports = {
   updateEvent,
   addManualEvent,
   updateEventSummary,
+  persistEventSingle, // Exported for backfill
+  loadPersistedEvents
 };

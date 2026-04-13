@@ -9,6 +9,12 @@ export const fetchConfig = async () => {
   return response.json();
 };
 
+export const fetchStatus = async () => {
+  const response = await fetch('/api/status');
+  if (!response.ok) throw new Error('Failed to fetch status');
+  return response.json();
+};
+
 export const checkHealth = async () => {
   const response = await fetch('/api/health');
   if (!response.ok) {

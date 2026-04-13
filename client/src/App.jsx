@@ -1,36 +1,34 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { checkHealth, fetchEvents, fetchSummary, fetchConfig } from './api';
-import EventList from './components/EventList';
-import SummaryPanel from './components/SummaryPanel';
-import LiveMonitor from './components/LiveMonitor';
+import { checkHealth, fetchEvents, fetchConfig, createManualEvent, fetchStatus } from './api';
+import Timeline from './components/Timeline';
 
 const App = () => {
-  const [appState, setAppState] = useState('loading'); // 'loading', 'ready', 'error'
+  const [appState, setAppState] = useState('loading');
   const [configError, setConfigError] = useState(null);
   const [events, setEvents] = useState([]);
   const [deviceId, setDeviceId] = useState(null);
-  const [selectedEvent, setSelectedEvent] = useState(null);
-  const [summaryData, setSummaryData] = useState(null);
-  const [summarizing, setSummarizing] = useState(false);
-  const [sumError, setSumError] = useState(null);
+  const [watcherStatus, setWatcherStatus] = useState(null);
+  const [timeUntilCronMs, setTimeUntilCronMs] = useState(null);
   
-  const liveMonitorRef = useRef(null);
+  // Processing progress: null | { stage: 'analyzing', eventId }
+  const [processing, setProcessing] = useState(null);
   const processedEventIds = useRef(new Set());
 
-  // Initial setup: health, config, and events
+  // Initial setup
   useEffect(() => {
     const startup = async () => {
       try {
         await checkHealth();
         const cfg = await fetchConfig();
         setDeviceId(cfg.deviceId);
-        
+
         const data = await fetchEvents();
         setEvents(data.events);
-        
-        // Mark existing events as "processed" so we don't auto-snap for history
         data.events.forEach(e => processedEventIds.current.add(e.eventId));
         
+        const status = await fetchStatus();
+        setWatcherStatus(status);
+
         setAppState('ready');
       } catch (err) {
         setConfigError(err.message);
@@ -40,8 +38,53 @@ const App = () => {
     startup();
   }, []);
 
-  // Polling disabled as requested. 
-  // Events will only refresh when manually triggered or on page load.
+  // Poll for new Google Home events
+  useEffect(() => {
+    if (appState !== 'ready') return;
+
+    const interval = setInterval(async () => {
+      try {
+        const status = await fetchStatus();
+        setWatcherStatus(status);
+        
+        const data = await fetchEvents();
+        const newEvents = data.events.filter(e => !processedEventIds.current.has(e.eventId));
+
+        if (newEvents.length > 0) {
+          console.log(`🔔 ${newEvents.length} new event(s) detected from Google Home!`);
+          const latest = newEvents[0];
+          processedEventIds.current.add(latest.eventId);
+          setEvents(data.events);
+        }
+      } catch (err) {
+        console.warn('Polling failed:', err.message);
+      }
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [appState]);
+
+  // Local tick for the countdown timer without hitting the server every second
+  useEffect(() => {
+    if (!watcherStatus?.nextCronTime) return;
+    
+    const tick = () => {
+      const remaining = watcherStatus.nextCronTime - Date.now();
+      setTimeUntilCronMs(Math.max(0, remaining));
+    };
+    
+    tick();
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
+  }, [watcherStatus?.nextCronTime]);
+
+  const formatCountdown = (ms) => {
+    if (ms === null) return '--:--';
+    const totalSeconds = Math.floor(ms / 1000);
+    const m = Math.floor(totalSeconds / 60);
+    const s = totalSeconds % 60;
+    return `${m}:${s.toString().padStart(2, '0')}`;
+  };
 
   const handleRefreshEvents = async () => {
     try {
@@ -52,47 +95,36 @@ const App = () => {
     }
   };
 
-  const handleSelectEvent = async (event) => {
-    setSelectedEvent(event);
-    setSummarizing(true);
-    setSumError(null);
-    setSummaryData(null);
-
+  const triggerManualAnalysis = async () => {
+    const manualId = `manual-${Date.now()}`;
+    setProcessing({ stage: 'analyzing', eventId: manualId });
     try {
-      const data = await fetchSummary(event.eventId);
-      setSummaryData(data);
+      console.log('Sending manual analysis request to backend...');
+      await createManualEvent(manualId);
+      await handleRefreshEvents();
     } catch (err) {
-      setSumError(err.message);
-    } finally {
-      setSummarizing(false);
+      console.error('Manual analysis failed:', err);
     }
+    setProcessing(null);
   };
 
+  // Loading screen
   if (appState === 'loading' && events.length === 0) {
     return (
-      <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-base)', color: 'var(--accent)' }}>
-        <div style={{ textAlign: 'center' }}>
-          <div className="spinner" style={{ fontSize: '3rem', marginBottom: '1rem' }}>🐱</div>
-          <p style={{ fontWeight: 600, letterSpacing: '1px' }}>INITIALIZING FEBO DASHBOARD...</p>
-        </div>
+      <div className="app-splash">
+        <div className="spinner">🐱</div>
+        <p>INITIALIZING FEBO DASHBOARD…</p>
       </div>
     );
   }
 
+  // Error screen
   if (appState === 'error') {
     return (
-      <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem' }}>
-        <div className="card" style={{ maxWidth: '500px', width: '100%', padding: '3rem', textAlign: 'center', borderTop: '4px solid var(--danger)' }}>
-          <h2 style={{ fontSize: '1.5rem', marginBottom: '1rem', color: 'var(--danger)' }}>Configuration Error</h2>
-          <p style={{ color: 'var(--text-primary)', marginBottom: '2rem' }}>{configError}</p>
-          <div style={{ background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '8px', textAlign: 'left', marginBottom: '2rem', fontSize: '0.9rem' }}>
-            <p style={{ color: 'var(--text-muted)', marginBottom: '0.5rem' }}>Troubleshooting steps:</p>
-            <ul style={{ paddingLeft: '1.2rem', color: 'var(--text-muted)' }}>
-              <li>Check your <strong>.env</strong> file</li>
-              <li>Ensure <strong>node server/index.js</strong> is running</li>
-              <li>Verify Google OAuth refresh token hasn't expired</li>
-            </ul>
-          </div>
+      <div className="app-splash">
+        <div className="card app-error-card">
+          <h2>Configuration Error</h2>
+          <p>{configError}</p>
           <button className="btn" onClick={() => window.location.reload()}>Try Again</button>
         </div>
       </div>
@@ -103,43 +135,39 @@ const App = () => {
     <div className="app-root">
       <header>
         <h1><span>🐱</span> What Is Febo Doing?</h1>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px' }}>Status</div>
-            <div style={{ fontSize: '0.9rem', color: 'var(--success)', fontWeight: 600 }}>● Active Monitoring</div>
-          </div>
+        <div className="header-status">
+          <div className="header-status-label">Status</div>
+          <div className="header-status-value">● Active Monitoring</div>
         </div>
       </header>
 
-      <main className="app-container">
-        <div className="sidebar">
-          <LiveMonitor 
-            ref={liveMonitorRef}
-            deviceId={deviceId}
-            onCapture={async (data) => {
-              console.log('Capture finished:', data);
-              // Refresh event list so the manual event appears
-              await handleRefreshEvents();
-              // Trigger summary for the new event
-              const newEvent = { eventId: data.eventId, timestamp: new Date().toISOString() };
-              handleSelectEvent(newEvent);
-            }}
-          />
-          
-          <EventList 
-            events={events} 
-            selectedEventId={selectedEvent?.eventId}
-            onSelectEvent={handleSelectEvent}
-            loading={summarizing}
-            onRefresh={handleRefreshEvents}
-          />
+      <main className="app-main">
+        <div className="monitor-panel">
+          <div className="card prompt-card">
+             <h3>🤖 Smart Watcher Active</h3>
+             <p>The backend server is silently monitoring your camera 24/7. It will automatically log events when motion is detected.</p>
+             
+             {watcherStatus && (
+               <div className="cron-status">
+                 <div className="cron-label">Next automatic check in:</div>
+                 <div className="cron-timer">{formatCountdown(timeUntilCronMs)}</div>
+               </div>
+             )}
+             
+             <button 
+               className="btn prompt-btn" 
+               onClick={triggerManualAnalysis}
+               disabled={!!processing}
+             >
+               {processing ? '⏳ Analyzing 10s Clip...' : '📹 Analyze Video Now'}
+             </button>
+          </div>
         </div>
-        
-        <SummaryPanel 
-          event={selectedEvent}
-          summaryData={summaryData}
-          loading={summarizing}
-          error={sumError}
+
+        <Timeline
+          events={events}
+          processing={processing || (watcherStatus?.isProcessing ? { stage: watcherStatus.processingStage } : null)}
+          onRefresh={handleRefreshEvents}
         />
       </main>
 
@@ -149,21 +177,119 @@ const App = () => {
           flex-direction: column;
           height: 100vh;
         }
-        .app-container {
-          display: grid;
-          grid-template-columns: 400px 1fr !important;
-          gap: 2rem;
-          padding: 2rem;
+        .app-main {
+          display: flex;
           flex: 1;
+          padding: 1.5rem;
+          gap: 1.5rem;
+          min-height: 0;
           overflow: hidden;
         }
-        .sidebar {
+        .monitor-panel {
+          width: 380px;
+          flex-shrink: 0;
+          align-self: flex-start;
+          position: sticky;
+          top: 0;
+        }
+        .prompt-card {
+          padding: 1.5rem;
+          border-left: 4px solid var(--accent);
+          background: var(--surface-light);
+        }
+        .prompt-card h3 {
+          margin-bottom: 0.5rem;
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+        }
+        .prompt-card p {
+          color: var(--text-muted);
+          font-size: 0.9rem;
+          margin-bottom: 1.5rem;
+          line-height: 1.5;
+        }
+        .cron-status {
+          background: rgba(0,0,0,0.2);
+          padding: 1rem;
+          border-radius: 8px;
+          margin-bottom: 1.5rem;
+          text-align: center;
+        }
+        .cron-label {
+          font-size: 0.8rem;
+          color: var(--text-muted);
+          text-transform: uppercase;
+          letter-spacing: 1px;
+          margin-bottom: 0.3rem;
+        }
+        .cron-timer {
+          font-size: 1.5rem;
+          font-weight: 700;
+          font-variant-numeric: tabular-nums;
+          color: var(--success);
+        }
+        .prompt-btn {
+          width: 100%;
+          background: var(--accent);
+          color: #000;
+          font-weight: 600;
+          padding: 0.8rem;
+          border-radius: 6px;
+        }
+        .prompt-btn:disabled {
+          opacity: 0.7;
+          cursor: not-allowed;
+        }
+        .app-main > .timeline-root {
+          flex: 1;
+          min-height: 0;
+        }
+        .app-splash {
+          height: 100vh;
           display: flex;
           flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          background: var(--bg-base);
+          color: var(--accent);
+          text-align: center;
           gap: 1rem;
-          overflow-y: auto;
+        }
+        .app-splash p {
+          font-weight: 600;
+          letter-spacing: 1px;
+        }
+        .app-error-card {
+          max-width: 460px;
+          padding: 2.5rem;
+          text-align: center;
+          border-top: 4px solid var(--danger);
+        }
+        .app-error-card h2 {
+          color: var(--danger);
+          margin-bottom: 0.75rem;
+        }
+        .app-error-card p {
+          color: var(--text-primary);
+          margin-bottom: 1.5rem;
+        }
+        .header-status {
+          text-align: right;
+        }
+        .header-status-label {
+          font-size: 0.75rem;
+          color: var(--text-muted);
+          text-transform: uppercase;
+          letter-spacing: 1px;
+        }
+        .header-status-value {
+          font-size: 0.9rem;
+          color: var(--success);
+          font-weight: 600;
         }
         .spinner {
+          font-size: 3rem;
           display: inline-block;
           animation: spin 2s linear infinite;
         }

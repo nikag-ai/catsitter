@@ -1,22 +1,25 @@
 /**
  * Frontend API helpers for the Febo Dashboard.
- * All requests are proxied via Vite to http://localhost:3000.
+ * In development, requests are proxied via Vite.
+ * In production, we use VITE_BACKEND_URL if provided.
  */
 
+const API_BASE = import.meta.env.VITE_BACKEND_URL || '';
+
 export const fetchConfig = async () => {
-  const response = await fetch('/api/config');
+  const response = await fetch(`${API_BASE}/api/config`);
   if (!response.ok) throw new Error('Failed to fetch config');
   return response.json();
 };
 
 export const fetchStatus = async () => {
-  const response = await fetch('/api/status');
+  const response = await fetch(`${API_BASE}/api/status`);
   if (!response.ok) throw new Error('Failed to fetch status');
   return response.json();
 };
 
 export const checkHealth = async () => {
-  const response = await fetch('/api/health');
+  const response = await fetch(`${API_BASE}/api/health`);
   if (!response.ok) {
     const data = await response.json();
     throw new Error(data.message || 'Backend connection failed');
@@ -25,7 +28,7 @@ export const checkHealth = async () => {
 };
 
 export const fetchEvents = async () => {
-  const response = await fetch('/api/events');
+  const response = await fetch(`${API_BASE}/api/events`);
   if (!response.ok) {
     const data = await response.json();
     throw new Error(data.error || 'Failed to fetch events');
@@ -34,7 +37,7 @@ export const fetchEvents = async () => {
 };
 
 export const fetchSummary = async (eventId) => {
-  const response = await fetch(`/api/summarize?eventId=${encodedURIComponent(eventId)}`);
+  const response = await fetch(`${API_BASE}/api/summarize?eventId=${encodedURIComponent(eventId)}`);
   if (!response.ok) {
     const data = await response.json();
     throw new Error(data.error || 'Summarization failed');
@@ -43,7 +46,7 @@ export const fetchSummary = async (eventId) => {
 };
 
 export const createManualEvent = async (eventId) => {
-  const response = await fetch('/api/events/manual', {
+  const response = await fetch(`${API_BASE}/api/events/manual`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ eventId })
